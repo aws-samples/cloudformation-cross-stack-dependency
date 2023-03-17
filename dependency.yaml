@@ -1,0 +1,85 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Example template deploying a VPC and subnet, which is a dependency for a EC2 instance in another template.
+
+  WARNING: You will be billed for the AWS resources created using this template. Make sure to delete the stack
+  and clean up resources if you do not intend to keep it running
+
+Parameters:
+  pVpcCidr:
+    Type: String
+    Description: Defines CIDR block to be used by this example VPC
+    Default: 10.0.0.0/16
+  pSubnetCidr:
+    Type: String
+    Description: Defines CIDR block to be used by this example subnet
+    Default: 10.0.1.0/24
+
+Resources:
+
+  # Dependency
+
+  rVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref pVpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+
+  rSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref rVpc
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: !Ref pSubnetCidr
+
+  # Dependency Coordination
+
+  rLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${rSignalFunction}
+      RetentionInDays: 7
+
+  rSignalFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./dependency-resolver
+      Handler: app.handler
+      Runtime: python3.9
+      Timeout: 60
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: 2012-10-17
+          Statement:
+          - Sid: ParameterStore
+            Effect: Allow
+            Action:
+              - ssm:GetParametersByPath
+              - ssm:PutParameter
+            Resource:
+              - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cf-deps/mySubnetDep/*
+              - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cf-deps/mySubnetDep
+      Environment:
+        Variables:
+          DEPENDENCY_ID: mySubnetDep
+          SUBNET_ID: !Ref rSubnet
+      Events:
+        ParameterRule:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source: [ aws.ssm ]
+              detail-type: [ Parameter Store Change ]
+              detail:
+                name: [ { prefix: /cf-deps/mySubnetDep } ]
+                operation: [ Create ]
+
+  rResolvePending:
+    Type: AWS::CloudFormation::CustomResource
+    DependsOn: rLogGroup # Do not execute Lambda before LogGroup is created
+    Properties:
+      ServiceToken: !GetAtt rSignalFunction.Arn
+

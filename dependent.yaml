@@ -1,0 +1,93 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Example template deploying a EC2 instance, dependent on a subnet in another template.
+
+  WARNING: You will be billed for the AWS resources created using this template. Make sure to delete the stack
+  and clean up resources if you do not intend to keep it running
+
+Parameters:
+  pInstanceType:
+    Type: String
+    Description: Instance type used to run the example bastion host
+    Default: t2.micro
+  pEc2Image:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Description: Amazon EC2 Image used to run the example bastion host
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+
+Resources:
+
+  # Dependency Coordination
+
+  rRequireSubnetHandle:
+    Type: AWS::CloudFormation::WaitConditionHandle
+
+  rRequireSubnetCondition:
+    Type: AWS::CloudFormation::WaitCondition
+    Properties:
+      Handle: !Ref rRequireSubnetHandle
+      Timeout: 3600
+
+  rSubnetParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /cf-deps/mySubnetDep/${AWS::StackName}
+      Type: String
+      Value: !Ref rRequireSubnetHandle
+
+  rLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${rParserFunction}
+      RetentionInDays: 7
+
+  rParserFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./json-parser
+      Handler: app.handler
+      Runtime: python3.9
+      Timeout: 60
+
+  rParseJson:
+    Type: AWS::CloudFormation::CustomResource
+    DependsOn: rLogGroup # Do not execute Lambda before LogGroup is created
+    Properties:
+      ServiceToken: !GetAtt rParserFunction.Arn
+      String: !GetAtt rRequireSubnetCondition.Data
+
+  # Dependent
+
+
+  rEc2InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Path: /
+
+  rEc2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles:
+        - !Ref rEc2InstanceRole
+
+  rEc2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref pEc2Image
+      IamInstanceProfile: !Ref rEc2InstanceProfile
+      SubnetId: !GetAtt rParseJson.subnetId
+      InstanceType: !Ref pInstanceType
