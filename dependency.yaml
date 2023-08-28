@@ -81,7 +81,7 @@ Resources:
     Type: AWS::CloudFormation::CustomResource
     DependsOn:
       - rLogGroup # Do not execute Lambda before LogGroup is created
-      - ParameterRule
+      - rSignalFunctionParameterRule
     Properties:
       ServiceToken: !GetAtt rSignalFunction.Arn
 
