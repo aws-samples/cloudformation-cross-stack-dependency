@@ -79,7 +79,9 @@ Resources:
 
   rResolvePending:
     Type: AWS::CloudFormation::CustomResource
-    DependsOn: rLogGroup # Do not execute Lambda before LogGroup is created
+    DependsOn:
+      - rLogGroup # Do not execute Lambda before LogGroup is created
+      - rSignalFunctionParameterRule
     Properties:
       ServiceToken: !GetAtt rSignalFunction.Arn
 
